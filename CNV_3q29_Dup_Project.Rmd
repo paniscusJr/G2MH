@@ -1,0 +1,144 @@
+---
+title: "CNV_3q29_Dup_Project"
+author: "Matthew Oetjens"
+date: "10/20/2021"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This project is designed to check the 1) frequency of 3q29 duplications in the MyCode freezes in the exome data for Jen Mulle.
+
+```{r include=FALSE}
+################################################################################
+## IMPORT LIBRARIES
+################################################################################
+
+#BiocManager::valid()
+#BiocManager::install("GenomicRanges")
+#BiocManager::install("ggbio", dependencies = TRUE)
+#BiocManager::install("Homo.sapiens")
+#BiocManager::install("BSgenome.Hsapiens.UCSC.hg38")
+#BiocManager::install("rtracklayer")
+#BiocManager::install("Gviz")
+#BiocManager::install("TxDb.Hsapiens.UCSC.hg38.knownGene")
+
+library(BiocManager)
+library(tidyverse)
+library(GenomicRanges)
+library(GenomicFeatures)
+library(ggbio)
+library(Gviz)
+library(gt)
+
+################################################################################
+## SETWD AND LOAD DATA
+################################################################################
+
+# set working directory in my storage
+setwd("/nas/Oetjens_Group_t1/mtoetjens/CNV_3q29_Project")
+
+# CNV ClinGen Coordinate file
+clingen_region.dat <- read.csv("/nas/Oetjens_Group_t1/mtoetjens/gsc_cnv_pull/Fz_175k/clingen_pathogenic_cnvs_hg38_semi_col_delim.csv", sep=";")
+
+# DiscovEHR high-confidence CNVs from 145k (VCrome capture for 60K), skip malformated row
+system("awk -F'\t' 'NF==15 {print}' /nas/MyCode_t1/DiscovEHR/RGC/GHS_Freeze_145_v3_pVCF/data/CNVs/IDT_hiseq/GHS_Freeze_145_v3.IDT_hiseq.high-confidence.cnv.annotated.bed > idt_hiseq_cnv_clean.bed" )
+
+system("awk -F'\t' 'NF==15 {print}' /nas/MyCode_t1/DiscovEHR/RGC/GHS_Freeze_145_v3_pVCF/data/CNVs/IDT_novaseq/GHS_Freeze_145_v3.IDT_novaseq.high-confidence.cnv.annotated.bed > idt_novaseq_cnv.clean.bed" )
+
+system("awk -F'\t' 'NF==15 {print}' /nas/MyCode_t1/DiscovEHR/RGC/GHS_Freeze_145_v3_pVCF/data/CNVs/VCRome/GHS_Freeze_145_v3.VCRome.high-confidence.cnv.annotated.bed > vcrome_cnv.clean.bed" )
+
+
+idt_hiseq_cnv.dat <- read_delim("idt_hiseq_cnv_clean.bed", "\t", escape_double = FALSE, col_names = FALSE, col_types = cols(X1 = col_character()), trim_ws = TRUE)
+idt_novaseq_cnv.dat <- read_delim("idt_novaseq_cnv.clean.bed",    "\t", escape_double = FALSE, col_names = FALSE, col_types = cols(X1 = col_character()), trim_ws = TRUE)
+vcrome_cnv.dat <- read_delim("vcrome_cnv.clean.bed",    "\t", escape_double = FALSE, col_names = FALSE, col_types = cols(X1 = col_character()), trim_ws = TRUE)
+
+# Convert to tibble
+idt_hiseq_cnv.dat <- as_tibble(idt_hiseq_cnv.dat)
+idt_novaseq_cnv.dat <- as_tibble(idt_novaseq_cnv.dat)
+vcrome_cnv.dat <- as_tibble(vcrome_cnv.dat)
+clingen_region.dat <- as_tibble(clingen_region.dat)
+
+# combind cnv data
+cnv_145K.dat <- rbind(idt_hiseq_cnv.dat, idt_novaseq_cnv.dat, vcrome_cnv.dat)
+cnv_145K.dat <- cnv_145K.dat[c(1:6,15)]
+colnames(cnv_145K.dat ) <- c("chrom", "start", "end", "sample", "dosage", "cn", "genes")
+
+################################################################################
+## Extract 3q29 duplications from MyCode Data
+################################################################################
+
+## Select 3q29 region by ISCA ID
+target_cnvs.dat <- clingen_region.dat %>%
+  filter(ISCA.ID == "ISCA-37443")
+
+cnv_regions.dat <- GRanges(
+  seqnames = Rle( target_cnvs.dat$Chr ),
+  ranges = IRanges(target_cnvs.dat$Start_hg38 , target_cnvs.dat$End_hg38))
+
+cnv_calls.dat <- GRanges(
+  seqnames = Rle(cnv_145K.dat$chrom),
+  ranges = IRanges(cnv_145K.dat$start, cnv_145K.dat$end),
+  sample = cnv_145K.dat$sample,
+  dosage = cnv_145K.dat$dosage,
+  size = cnv_145K.dat$end - cnv_145K.dat$start)
+
+# Use granges to find overlap with 3q29 CNVs (should make this into a function)
+hits <- findOverlaps(cnv_calls.dat, cnv_regions.dat)
+overlaps <- pintersect(cnv_calls.dat[queryHits(hits)], cnv_regions.dat[subjectHits(hits)])
+percentOverlap <- width(overlaps) / width(cnv_regions.dat[subjectHits(hits)])
+passing_hits <- hits[percentOverlap > 0.5]
+extracted_cnvs.dat <- cnv_calls.dat[queryHits(passing_hits)]
+extracted_cnvs.dat$pctOverlap <- percentOverlap[percentOverlap > 0.5]
+
+################################################################################
+## Create objects for plotting on UCSC
+################################################################################
+
+#download.file("https://ftp.ncbi.nlm.nih.gov/refseq/MANE/MANE_human/release_0.95/MANE.GRCh38.v0.95.select_refseq_genomic.gff.gz", "MANE.GRCh38.v0.95.select_refseq_genomic.gff.gz")
+txdb = makeTxDbFromGFF('/nas/Oetjens_Group_t1/mtoetjens/CNV_3q29_Project/MANE.GRCh38.v0.95.select_refseq_genomic.gff.gz')
+
+# Create tracks
+pathogenicRegionTrack <- AnnotationTrack(GRanges("chr3", IRanges(196029183, 197617791), color="black", ID="3q29"), 
+                                         feature=as.vector("black"), name = "ClinGen Pathogenic Region", black="black")
+gtrack <- GenomeAxisTrack()
+grtrack <- GeneRegionTrack(txdb, chromosome = "chr3", name = "Gene Model",  id = "TXNAME")
+extracted_cnvs.dat$color <- ifelse(extracted_cnvs.dat$dosage == "DUP", "blue", ifelse(extracted_cnvs.dat$dosage == "DEL", "red", "black"))
+cnvTrack <- AnnotationTrack(extracted_cnvs.dat, name = "MyCode CNVs", feature=as.vector(extracted_cnvs.dat$color), red="red", blue="blue", black = "black")
+
+
+################################################################################
+## Report 3q29 data
+################################################################################
+
+```
+
+## 3q29 CNVs in Pathogenic Region (\> 50% overlap)
+
+```{r include=TRUE}
+as_tibble(as.data.frame(table(extracted_cnvs.dat$dosage))) %>% 
+  dplyr::rename(dosage = Var1, count = Freq) %>%
+  gt()
+```
+
+```{r include=TRUE}
+as_tibble(extracted_cnvs.dat) %>%
+  dplyr::select(seqnames, start, end, dosage) %>%
+  dplyr::rename(chr = seqnames) %>%
+  gt()
+```
+
+## Plot coordinates on the hg38 genome (3q29 Clingen Pathogenic Region = Black; Del = Red; Dup = Blue)
+
+```{r 3q29 CNVs, fig.height = 10, fig.width = 15, echo=FALSE}
+plotTracks(list(pathogenicRegionTrack, cnvTrack, grtrack, gtrack), 
+           from = 196029183-1000000, to = 197617791+1000000, 
+           chromosome = "chr3", showID = T, geneSymbol = T, title.width=0.25, sizes=c(1,2,1,1))
+
+```
