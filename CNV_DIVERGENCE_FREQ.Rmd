@@ -1,0 +1,96 @@
+---
+title: "CNV_Ascertainment_UK_Biobank"
+author: "Matthew Oetjens"
+date: "10/22/2021"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+This project is designed to compare the prevalence of dels and dups at pathogenic
+CNV regions. Explore the causes of the divergence in CNV prevalence. For example, does a
+diverence in prevalence correlate with a larger IQ delta between the CNVs.
+
+```{r include=FALSE}
+################################################################################
+## IMPORT LIBRARIES
+################################################################################
+
+library(tidyverse)
+library(gt)
+
+################################################################################
+## SETWD AND LOAD DATA
+################################################################################
+
+# set working directory in my storage
+setwd("/nas/Oetjens_Group_t1/mtoetjens/cnv_ascertainment/")
+
+# load data
+ukb_cnv_table.dat <- read.csv("/nas/Oetjens_Group_t1/mtoetjens/cnv_ascertainment/data/CRAWFORD_UKB_CNV_PREVALENCE.csv")
+ghs_cnv_table.dat <-read.csv("/nas/Oetjens_Group_t1/mtoetjens/cnv_ascertainment/data/GESINGER_CNV_PREVALENCE.csv")
+kendall_cognitive_results.dat <-read.csv("/nas/Oetjens_Group_t1/mtoetjens/cnv_ascertainment/data/KENDALL_COGNITIVE_SCORE_RESULTS.txt")
+
+
+# convert to tibble
+ukb_cnv_table.dat <- as_tibble(ukb_cnv_table.dat) 
+ghs_cnv_table.dat <- as_tibble(ghs_cnv_table.dat) 
+
+
+################################################################################
+## Rename CNVs named after syndromes
+################################################################################
+
+
+################################################################################
+## UKB CNV Prevalences
+################################################################################
+
+# Sample size of CNV table from Crawford et al.
+cel_files = 488415
+exclusions = 25069
+samplesize = cel_files-exclusions
+
+```
+
+```{r include=TRUE}
+# Calculate CNV prevalence differences 
+ukb_prev_table.dat <- ukb_cnv_table.dat %>%
+  dplyr::select(Dosage, CNV, N_carriers) %>%
+  mutate_at("CNV", str_replace, "_?del|_?dup", "") %>%
+  pivot_wider(names_from = Dosage, values_from =  N_carriers) %>%
+  #pivot_wider(names_from = Dosage, values_from =  N_carriers, values_fill=0) %>%
+  rename(Del_ct = DEL, Dup_ct = DUP) %>%
+  mutate(CNV_ct = Del_ct + Dup_ct, Del_prev_pct = Del_ct/samplesize * 100, Dup_prev_pct = Dup_ct/samplesize * 100, Prev_pct_diff = Dup_prev_pct - Del_prev_pct, Prev_ratio = Dup_ct/Del_ct)  %>%
+  filter(CNV_ct > 10) %>%
+  arrange(-Prev_ratio)
+```
+
+```{r include=TRUE}
+################################################################################
+## GHS CNV Prevalences
+################################################################################
+ghs_samplesize = 145000
+
+ghs_prev_table.dat <- ghs_cnv_table.dat %>%
+  rename(CNV = Crawford_CNV, N_carriers = count, Dosage=Pathogenic_Dosage) %>%
+  mutate_at("CNV", str_replace, "_?del|_?dup", "")  %>%
+  pivot_wider(names_from = Dosage, values_from =  N_carriers)  %>%
+  rename(Del_ct = DEL, Dup_ct = DUP) %>%
+  mutate(CNV_ct = Del_ct + Dup_ct, Del_prev_pct = Del_ct/samplesize * 100, Dup_prev_pct = Dup_ct/samplesize * 100, Prev_pct_diff = Dup_prev_pct - Del_prev_pct, Prev_ratio = Dup_ct/Del_ct)  %>%
+  filter(CNV_ct > 10) %>%
+  arrange(-Prev_ratio) 
+```
+
+tmp.dat <- merge(ghs_prev_table.dat, ukb_prev_table.dat, by ="CNV")
+tmp.dat <- tmp.dat[which(tmp.dat$CNV != "15q13.3(CHRNA7)"),]
+cor.test(tmp.dat$Prev_ratio.y, tmp.dat$Prev_ratio.x)
+
+
+
+
+
+```{r}
+plot(cars)
+```
+
